@@ -1,0 +1,189 @@
+# Configuração para text2sql-generate
+# Parâmetros de linha de comando têm precedência sobre este arquivo.
+
+# Configuração do modelo LLM
+model:
+  name: "Qwen/Qwen3-32B-AWQ"
+  max_new_tokens: 32768
+  temperature: 0.0001
+  top_p: 0.95
+  do_sample: false
+  enable_thinking: true
+
+# Configuração do RAG
+rag:
+  model_name: "neuralmind/bert-large-portuguese-cased"
+  similarity_threshold: 0.3
+  max_tables: 5
+  max_columns_per_table: 20
+
+# Caminhos dos arquivos
+paths:
+  questions: "data/questions.csv"
+  schema: "data/schema.yaml"
+
+# Configuração dos dados de entrada
+data:
+  question_column: "Questões"
+  extra_columns:
+    - "Tipo de dado necessário"
+    - "Intenção"
+
+# Configuração de saída
+output:
+  run: "default"                    # Nome da run (execução)
+  save_queries: true
+  queries_dir: "data/queries"       # Diretório base para salvar queries SQL
+  results_dir: "data/results"       # Diretório base para salvar resultados CSV
+
+# Parâmetros para substituição nas perguntas
+# Suporta múltiplos parâmetros indexados: X1, X2, Y1, Y2, etc.
+# X = item/produto/medicamento, Y = período de tempo
+parameters:
+  # Valores default (aplicados quando não há específico para a pergunta)
+  default:
+    X1: "default"
+    Y1: "default"
+
+  # Parâmetros específicos por pergunta (ID = índice da linha no CSV, começando em 1)
+  # Valores extraídos de questions_source.csv
+  questions:
+    2:
+      Y1: "nos próximos 90 dias"
+    3:
+      X1: "37"
+      Y1: "nos últimos 6 meses"
+    4:
+      X1: "37"
+    6:
+      Y1: "nos últimos 3 meses"
+    7:
+      Y1: "no último mês"
+    8:
+      Y1: "hoje"
+    10:
+      X1: "37"
+    11:
+      Y1: "nos próximos 30 dias"
+    12:
+      Y1: "nos últimos 12 meses"
+    13:
+      Y1: "do último trimestre"
+    14:
+      Y1: "60 dias"
+    15:
+      Y1: "nos próximos 90 dias"
+    16:
+      X1: "37"
+      Y1: "o próximo mês"
+    17:
+      Y1: "do próximo mês"
+      Y2: "dos últimos 3 meses"
+    18:
+      Y1: "mês"
+    19:
+     X1: "37"
+     Y1: "mensal"
+    20:
+      Y1: "na última semana"
+
+# Templates personalizados (opcional)
+# Descomente e edite conforme necessário
+templates:
+   system: |
+     Você é um conversor de linguagem natural para SQL.
+     Sua tarefa é converter perguntas em linguagem natural em consultas SQL precisas.
+
+     Contexto do Banco de Dados:
+     {context}
+
+     Regras de negócio:
+     {business_rules}
+
+     Diretrizes Importantes:
+     - REGRA PRINCIPAL: Gere a consulta mais simples possível que responda exatamente o que foi perguntado. Não adicione filtros, tabelas, colunas ou subqueries além do necessário para responder a pergunta.
+     - PRIORIDADE: Regras de negócio sempre prevalecem sobre a diretriz de simplicidade. Se uma regra de negócio exige uma abordagem específica, siga-a mesmo que exista um caminho mais simples.
+     - Sempre que for questionado quais medicamentos mostre o id do medicamento/item, adicione-o no select.
+     - Sempre utilize os nomes de tabelas e colunas corretos, conforme mostrado no contexto.
+     - Utilize JOINs explícitos ao acessar múltiplas tabelas.
+     - Utilize apenas os filtros WHERE necessários para atender o que a pergunta pede. Não adicione filtros extras por suposição.
+     - Só trate valores NULL se a pergunta ou regra de negócio exigir.
+     - Só utilize funções de agregação se a pergunta pedir totais, médias, contagens, rankings ou similares.
+     - Sempre utilize aliases para as tabelas para maior clareza.
+     - Quando existir operações de única coluna no select, nomeie a coluna com o nome de antes da operação.
+     - Palavras como "histórico", "listagem", "registros" ou "movimentações" indicam que o usuário quer os dados detalhados, sem agregação.
+     - Toda query com "últimos X tempo" DEVE usar no filtro: BETWEEN (CURRENT_DATE - intervalo) AND CURRENT_DATE
+     - Padrão linguístico → Comportamento SQL:
+      "Qual [singular] tem maior/menor..." → LIMIT 1
+      "Quais [plural]..." → sem LIMIT 1
+      "Liste N... / Top N..." → LIMIT N
+     - Atente-se a todas informações fornecidas junto com a pergunta. A intenção e os dados necessários.
+     - Não adicione filtros, tabelas ou colunas que eu não tenha pedido explicitamente.
+
+     Regras de Resposta:
+     1. NÃO inicie com "Aqui está o SQL" ou explicações.
+     2. NÃO utilize blocos de código markdown (```sql). Retorne apenas o texto cru da query.
+     3. NÃO inclua comentários ou notas finais.
+    
+     Output esperado: Apenas a string SQL válida iniciada por SELECT.
+
+   business_rules: |
+     ## Definicao de estoque critico
+     Estoque critico e quando o estoque total e menor que o consumo de 15 dias.
+     Voce so utilizara o estoque critico se a pergunta mencionar.
+     Em falta significa que o estoque disponivel e zero. Como o estoque e registrado por local, um material pode estar em falta em alguns locais e disponivel em outros. Ao listar itens em falta, mostrar o detalhe por local de estoque.
+
+     ### Como calcular estoque critico
+     Tabelas necessarias: estoque_mat_med e cadastro_mat_med.
+     O estoque esta armazenado por local, portanto o estoque total de um material e a soma do estoque disponivel de todos os locais.
+     O consumo de 15 dias e derivado do consumo mensal (qt_consumo): consumo_15_dias = (qt_consumo / 30.0) * 15. A coluna qt_consumo tem o mesmo valor por material em todos os locais; ao agregar por material, incluir qt_consumo no GROUP BY em vez de somar.
+     IMPORTANTE: Primeiro agregar o estoque total por material somando todos os locais, depois comparar com o consumo de 15 dias. Nao filtrar linhas individuais antes de agregar.
+     Quando a pergunta mencionar um periodo especifico para consumo (ex: "ultimos 3 meses"), calcular o consumo a partir das movimentacoes do tipo consumo na tabela movimento_mat_med. Caso contrario, usar qt_consumo da tabela estoque_mat_med.
+
+     ## Estoque
+     A tabela estoque_mat_med representa APENAS o estoque atual por local. Ela NAO possui historico — nao pode ser usada para calcular estoque em datas passadas.
+     Sempre usar qt_estoque_disp para estoque disponivel, NUNCA qt_estoque. Parte do estoque pode estar bloqueada (ex: quarentena).
+     Caso seja necessario o estoque total de um produto, somar qt_estoque_disp de todos os locais.
+
+     ## Classificacao de operacoes de movimentacao
+     A coluna ds_operacao na tabela movimento_mat_med indica o tipo de movimentacao. As operacoes sao classificadas nas seguintes categorias de negocio:
+     - Consumo: operacoes cujo nome contem a palavra "consumo" (ex: Consumo, Consumo Paciente, Consumo Setor).
+     - Perdas e vencimentos: operacoes de perda, quebra, avaria, dano, desvio, diminuicao de inventario e materiais vencidos. Os nomes dessas operacoes contem termos como "perda", "quebra", "avaria", "dano", "desvio", "diminu", "vencid".
+     - Transferencias: operacoes cujo nome contem "transferencia".
+     - Ajustes de inventario: operacoes cujo nome contem "inventario".
+     IMPORTANTE: Ao filtrar por tipo de operacao, usar comparacao case-insensitive com correspondencia parcial, pois os nomes podem variar em maiusculas/minusculas e sufixos. Ao combinar filtros de tipo de operacao com outros filtros (ex: data), garantir o agrupamento correto das condicoes logicas com parenteses.
+
+     ## Consumo
+     O consumo medio mensal pre-calculado de um material esta na coluna qt_consumo da tabela estoque_mat_med, a nao ser que a pergunta especifique um periodo para calcular a media a partir das movimentacoes de consumo.
+     Para converter consumo mensal em consumo diario: consumo_diario = qt_consumo / 30.0.
+     Para converter consumo mensal em consumo de N dias: consumo_N_dias = (qt_consumo / 30.0) * N.
+
+     ## Impacto financeiro de perdas
+     Perdas e vencimentos abrangem todas as operacoes da categoria de perdas listada acima.
+     O impacto financeiro e calculado como: quantidade movimentada * custo medio unitario (vl_medio).
+     O custo medio unitario (vl_medio) esta na tabela estoque_mat_med. Ao cruzar movimentacoes com estoque para obter vl_medio, usar a chave composta cd_material + ds_local_estoque, pois vl_medio pode variar entre locais.
+     Arredondar o resultado financeiro para 2 casas decimais.
+
+     ## Validade
+     A data de validade esta na coluna ds_validade da tabela compras_mat_med.
+     Perguntas sobre materiais que vencem em determinado periodo precisam apenas de compras_mat_med e cadastro_mat_med — nao adicionar estoque_mat_med nem informacao de lote.
+     Um material pode ter multiplos registros de compra com a mesma validade, portanto usar eliminacao de duplicatas ao listar materiais por validade.
+
+     ## Lotes
+     A informacao de lote esta na coluna cd_lote_fabricacao da tabela compras_mat_med. Incluir cd_lote_fabricacao apenas quando a pergunta mencionar lotes explicitamente.
+     Ao listar lotes em estoque, usar eliminacao de duplicatas para evitar repeticoes causadas por joins com multiplos locais de estoque. Selecionar apenas as colunas pedidas, sem adicionar colunas extras como quantidade.
+
+     ## Risco de vencimento sem consumo
+     Para identificar itens com risco de vencer sem serem consumidos, a analise e feita por lote (cd_lote_fabricacao).
+     A logica e: comparar o estoque disponivel a vencer com o consumo historico do mesmo periodo, ambos por lote.
+     - Produtos a vencer: selecionar da compras_mat_med os lotes cuja validade esteja dentro do periodo futuro especificado.
+     - Consumo historico por lote: cruzar estoque_mat_med com movimento_mat_med (usando cd_material + ds_local_estoque) para obter o consumo no periodo equivalente, agrupado por lote (ds_lote_fornec).
+     - Estoque disponivel por lote: cruzar estoque_mat_med com movimento_mat_med para obter o estoque atual, agrupado por lote.
+     - A ligacao entre compras e movimentacoes e feita pelo lote: cd_lote_fabricacao (compras) = ds_lote_fornec (movimento).
+     Itens com risco sao aqueles cujo estoque a vencer e maior ou igual ao consumo do periodo — ou seja, o consumo nao sera suficiente para esgotar o estoque antes do vencimento.
+
+     ## Ponto de ressuprimento
+     O calculo do ponto de ressuprimento usa o consumo medio mensal (calculado a partir das movimentacoes de consumo) acrescido de uma margem de seguranca de 25%.
+     Formula: quantidade_minima = consumo_medio_mensal * 1.25.
+     Itens que precisam de ressuprimento sao aqueles cujo estoque disponivel atual esta abaixo da quantidade_minima.
+     Quanto solicitar = quantidade_minima - estoque_disponivel_atual.
